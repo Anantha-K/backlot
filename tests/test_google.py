@@ -5294,6 +5294,48 @@ def test_drive_owned_by_me_can_share_and_modified_by_me_follow_the_caller(
         assert {k for k, v in f["capabilities"].items() if v} == _CAPS_TRUE[kind, owned]
 
 
+def test_drive_key_order_differs_between_listing_and_read(owned_and_lent):
+    """A listing's entries, a read by id and a folder carry the same keys and values in
+    different orders, and a listing's top level in its own order. Ava is a scoped caller, so
+    an item she owns carries `modifiedByMeTime` and an item shared with her carries
+    `sharedWithMeTime`, and both keys have to survive the reorder in place."""
+    list_order = (
+        "kind fileExtension md5Checksum viewedByMe mimeType exportLinks parents iconLink "
+        "shared lastModifyingUser owners webViewLink webContentLink size spaces id name "
+        "starred trashed explicitlyTrashed createdTime modifiedTime modifiedByMeTime "
+        "sharedWithMeTime quotaBytesUsed version ownedByMe fullFileExtension capabilities "
+        "modifiedByMe"
+    ).split()
+    get_order = (
+        "kind id name mimeType starred trashed explicitlyTrashed parents spaces version "
+        "webContentLink webViewLink iconLink viewedByMe createdTime modifiedTime "
+        "modifiedByMeTime modifiedByMe sharedWithMeTime owners lastModifyingUser shared "
+        "ownedByMe capabilities fullFileExtension fileExtension md5Checksum size "
+        "quotaBytesUsed exportLinks"
+    ).split()
+    s = owned_and_lent
+    tokens = yaml.safe_load(s.tokens_path.read_text(encoding="utf-8"))
+    ava = {"Authorization": f"Bearer {tok(tokens, 'ava@acme.com')}"}
+    with client_for(s, reload=True) as c:
+        listing = c.get(
+            "/drive/v3/files", headers=ava, params={"fields": "*", "pageSize": 100}
+        ).json()
+        entries = {f["name"]: f for f in listing["files"]}
+        mine, theirs, plans = entries["Mine"], entries["Theirs"], entries["Plans"]
+        assert list(mine) == [k for k in list_order if k in mine]
+        assert list(theirs) == [k for k in list_order if k in theirs]
+        assert list(plans) == [k for k in list_order if k in plans]
+        assert "modifiedByMeTime" in mine and "sharedWithMeTime" not in mine
+        assert "sharedWithMeTime" in theirs and "modifiedByMeTime" not in theirs
+        for entry in (mine, theirs, plans):
+            got = c.get(
+                f"/drive/v3/files/{entry['id']}", headers=ava, params={"fields": "*"}
+            ).json()
+            assert list(got) == [k for k in get_order if k in got]
+        paged = c.get("/drive/v3/files", headers=ava, params={"pageSize": 2}).json()
+        assert list(paged) == ["files", "kind", "nextPageToken", "incompleteSearch"]
+
+
 _PER_CALLER = "ownedByMe,capabilities,modifiedByMe,modifiedByMeTime,modifiedTime"
 
 
