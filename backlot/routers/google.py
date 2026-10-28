@@ -3358,9 +3358,9 @@ def _drive_project_paths(entries: list[dict], paths, under: str, defaults: froze
     ]
 
 
-# Real Drive's key order, measured 2026-10-27: a listing's entries one way, a read by id
-# another, and a listing's own top level a third. The two per-caller keys sit where that
-# measurement puts them: in a listing after `modifiedTime`, in a read after `modifiedByMe`.
+# Real Drive's key orders, measured 2026-10-27 with `fields=*` on 54 files of ten types, each
+# listed and then read by id: a listing's entries in one, a read by id in another, and a
+# listing's own top level in a third. A mask does not change them.
 _DRIVE_FILE_LIST_ORDER = (
     "kind",
     "fileExtension",
@@ -3438,29 +3438,25 @@ def _drive_ordered(obj: dict, order: tuple[str, ...]) -> dict:
 
 def _drive_project_one(obj: dict, fields: str | None) -> dict:
     """A single file resource trimmed to a ``files.get`` mask; the mask is validated (400 on a name
-    real refuses) before trimming, including nested object fields. Trimming a file read by id as
-    a listing's entries are trimmed is what makes one file carry the same keys and values
-    either way, in the read's own order rather than the listing's.
+    real refuses) before trimming, including nested object fields. A file read by id is trimmed as
+    a listing's entries are, so it carries the keys and values it carries in a listing, in the
+    order real gives a read.
 
     No mask answers the `_DRIVE_FILE_DEFAULT` keys alone, measured 2026-10-25. A mask that is empty
     or of spaces and tabs alone selects nothing, which is not the same as no mask: measured
     2026-09-23, `fields=` and `fields=%20` answer ``{}``, and `fields=%09` did too on 2026-10-20."""
     paths = _drive_mask(fields)
     if paths is None:
-        return _drive_ordered(
-            {k: v for k, v in obj.items() if k in _DRIVE_FILE_DEFAULT},
-            _DRIVE_FILE_GET_ORDER,
+        trimmed = {k: v for k, v in obj.items() if k in _DRIVE_FILE_DEFAULT}
+    else:
+        _check_mask(
+            paths,
+            _DRIVE_FILE_FIELDS,
+            unserved=_DRIVE_FILE_UNSERVED,
+            subfields=_DRIVE_FILE_SUBFIELDS,
         )
-    _check_mask(
-        paths,
-        _DRIVE_FILE_FIELDS,
-        unserved=_DRIVE_FILE_UNSERVED,
-        subfields=_DRIVE_FILE_SUBFIELDS,
-    )
-    return _drive_ordered(
-        _drive_trim_object(obj, paths, None, _DRIVE_FILE_DEFAULT),
-        _DRIVE_FILE_GET_ORDER,
-    )
+        trimmed = _drive_trim_object(obj, paths, None, _DRIVE_FILE_DEFAULT)
+    return _drive_ordered(trimmed, _DRIVE_FILE_GET_ORDER)
 
 
 def _drive_fill_shared(conn, files: list[dict], stored: set[str]) -> None:
@@ -4176,10 +4172,6 @@ async def drive_files_get(file_id: str, request: Request):
             raise gerr.not_downloadable()
         mime = row["mime_type"] or "application/octet-stream"
         return Response(row["content"].encode("utf-8"), media_type=mime)
-    # Same projection as files.list: a file resolved by id and the same file read out of a listing
-    # carry the same keys and values, in two different orders - the read's order here, the
-    # listing's there - so a byte comparison of the two answers differs even though the parsed
-    # bodies agree.
     return _drive_project_one(
         _drive_file(conn, row, me=caller.email),
         gerr.first_repeat(request.query_params, "fields"),
